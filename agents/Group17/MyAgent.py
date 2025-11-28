@@ -11,6 +11,7 @@ from typing import Optional, List
 
 import math
 import random
+import time
 
 # util funcs
 def current_player(board : Board):
@@ -22,11 +23,11 @@ def current_player(board : Board):
     red, blue = 0, 0
     for row in board.tiles:
         for tile in row:
-            if tile.colour == RED:
+            if tile.colour == Colour.RED:
                 red += 1
-            else:
+            elif tile.colour == Colour.BLUE:
                 blue += 1
-    return Colour.RED if red == blue else return Colour.BLUE
+    return Colour.RED if red == blue else Colour.BLUE
 
 def get_legal_moves(board : Board):
 
@@ -49,12 +50,25 @@ def apply_move(board: Board, move: Move):
     board.set_tile_colour(move.i, move.j, player)
     board.has_ended(player)  # updates internal winner state
 
-def is_terminal(boar : Board):
+def is_terminal(board : Board):
     """
         Checks wether a board state is terminal
     """
     return board.get_winner() is not None
 
+def rollout_policy(board : Board):
+    """
+        TODO: Rollout policy to be implemented - simulate until terminal state, returning the winning colour
+    """
+    return None
+
+def neural_network_evaluate(board : Board):
+    """
+        TODO: Neural Network evaluation function to be implemented - think should return the probability of winning for the current player
+
+    """
+    # placeholder
+    return 0.5
 class MCTSNode():
     """
         Monte Carlo Tree Search Node
@@ -77,7 +91,7 @@ class MCTSNode():
         self.visits = 0
         self.wins = 0.0
 
-    def is_fully_expanded(self);
+    def is_fully_expanded(self):
         return len(self.untried_moves) == 0
 
     def best_child(self, c : float = 1.41):
@@ -88,13 +102,18 @@ class MCTSNode():
                 + c * math.sqrt(math.log(self.visits) / child.visits)
             )
         )
+    
+    def select_child(self):
+        # TODO: UCT-RAVE implementation
+        return self.best_child()
 
     def expand(self):
         move = self.untried_moves.pop()
+
         next_board = deepcopy(self.board)
         next_player = current_player(next_board)
 
-        apply_move(next_
+        apply_move(next_board, move)
         
         child = MCTSNode(
             board=next_board,
@@ -103,11 +122,12 @@ class MCTSNode():
             player=next_player
         )
         self.children.append(child)
-        return childboard, move)
+        return child
 
     def backpropogate(self, winner : Colour):
         self.visits += 1
-        if self.player == winner:
+
+        if winner is not None and self.player == winner:
             self.wins += 1
         if self.parent is not None:
             self.parent.backpropogate(winner)
@@ -169,14 +189,48 @@ class MyAgent(AgentBase):
                 OR use one of the four child selection methods - in lecture slides
 
         """
+        root = MCTSNode(deepcopy(board))
 
-        # UCT + RAVE
+        TIME_LIMIT = 0.9
+        end_time = time.time() + TIME_LIMIT
 
-        # Rollout 
+        while time.time() < end_time:
 
-        # NN
+            # selection
+            node = root
+            while node.is_fully_expanded() and not is_terminal(node.board):
+                # TODO: select child should be UCT-RAVE
+                node = node.select_child()
 
-        # Placeholder 
-        return Move(-1, -1)
+            # expansion
+            if not is_terminal(node.board):
+                node = node.expand()
+            
+            # simulation / rollout
+
+            # TODO (TEAM TASK - NN): Use neural_network_evaluate(node.board)
+            # to guide rollout or replace rollout_policy entirely.
+            nn_eval = neural_network_evaluate(node.board)
+
+            # TODO: placeholder - someone implement rollout policy
+            winner = rollout_policy(node.board)
+
+            # backpropogation
+            node.backpropogate(winner)
+        
+        # select move with the most visits
+        best_move = max(
+            root.children,
+            key=lambda child: child.visits
+        ).move
+
+        return best_move
+
+        
+
+        
+
+        
+        
 
     
