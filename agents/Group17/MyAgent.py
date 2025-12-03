@@ -38,7 +38,7 @@ def get_legal_moves(board : Board):
     moves = []
     for i in range(board.size):
         for j in range(board.size):
-            if board[i][j].colour == Colour.EMPTY:
+            if board.tiles[i][j].colour is None:
                 moves.append(Move(i, j))
     return moves
 
@@ -47,7 +47,7 @@ def apply_move(board: Board, move: Move):
         Applies a move to the board by setting tile colour and updating winner.
     """
     player = current_player(board)
-    board.set_tile_colour(move.i, move.j, player)
+    board.set_tile_colour(move.x, move.y, player)
     board.has_ended(player)  # updates internal winner state
 
 def is_terminal(board : Board):
@@ -60,7 +60,27 @@ def rollout_policy(board : Board):
     """
         TODO: Rollout policy to be implemented - simulate until terminal state, returning the winning colour
     """
-    return None
+
+    rollout_board = deepcopy(board)
+    size = rollout_board.size
+    center = size / 2
+
+    def move_score(move : Move):
+        # prefer moves towards center
+        return -((move.x - center) ** 2 + (move.y - center) ** 2)
+    
+    while not is_terminal((rollout_board)):
+        legal_moves = get_legal_moves(rollout_board)
+
+        # give moves which are close to the center a better weight
+        scored = [(move_score(m), m) for m in legal_moves]
+        best_score = max(scored, key=lambda x: x[0])[0]
+        best_moves = [m for (s, m) in scored if s == best_score]
+
+        move = random.choice(best_moves)
+        apply_move(rollout_board, move)
+
+    return rollout_board.get_winner()
 
 def neural_network_evaluate(board : Board):
     """
@@ -75,7 +95,7 @@ class MCTSNode():
     """
     def __init__(self,
         board : Board,
-        parent : Optional[MCTSNode] = None,
+        parent : Optional["MCTSNode"] = None,
         move : Optional[Move] = None,
         player : Optional[Colour] = None
         ):
@@ -95,11 +115,19 @@ class MCTSNode():
         return len(self.untried_moves) == 0
 
     def best_child(self, c : float = 1.41):
+        # c is a constant that balances exploration and exploitation
+
+        # first if there are any unvisited nodes choose them first
+        for child in self.children:
+            if child.visits == 0:
+                return child
+        
+        # if not then use the upper confidence applied to trees - UCB1 but applied to trees (UCT)
         return max(
             self.children,
             key=lambda child: (
-                child.wins / child.visits
-                + c * math.sqrt(math.log(self.visits) / child.visits)
+                (child.wins / child.visits)
+                + c * math.sqrt((2 *math.log(self.visits)) / child.visits)
             )
         )
     
