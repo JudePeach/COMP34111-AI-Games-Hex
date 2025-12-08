@@ -1,5 +1,4 @@
-from random import choice 
-
+from random import choice
 from src.AgentBase import AgentBase
 from src.Board import Board
 from src.Colour import Colour
@@ -42,13 +41,28 @@ def get_legal_moves(board : Board):
                 moves.append(Move(i, j))
     return moves
 
-def apply_move(board: Board, move: Move):
+def apply_move_fast(board: Board, move: Move, player : Colour):
     """
         Applies a move to the board by setting tile colour and updating winner.
     """
+    board.set_tile_colour(move.x, move.y, player)
+    try:
+        board.has_ended(player)
+    except Exception:
+        # ignore if has_ended behaves differently
+        pass
+
+def apply_move(board : Board, move : Move):
+    """
+        Backwards-compatible apply_move using current_player (slower).
+    """
     player = current_player(board)
     board.set_tile_colour(move.x, move.y, player)
-    board.has_ended(player)  # updates internal winner state
+    try:
+        board.has_ended(player)
+    except Exception:
+        pass
+    
 
 def is_terminal(board : Board):
     """
@@ -57,30 +71,66 @@ def is_terminal(board : Board):
     return board.get_winner() is not None
 
 def rollout_policy(board : Board):
-    """
-        TODO: Rollout policy to be implemented - simulate until terminal state, returning the winning colour
+    """ 
+        Shuffle the legal moves and play them in sequence (fast rollout).
+        Uses deepcopy(board) and passes player correctly to apply_move_fast.
     """
 
+    # make a fast local copy
     rollout_board = deepcopy(board)
-    size = rollout_board.size
-    center = size / 2
 
-    def move_score(move : Move):
-        # prefer moves towards center
-        return -((move.x - center) ** 2 + (move.y - center) ** 2)
+    # determine starting player once
+    player = current_player(rollout_board)
+
+    legal_moves = get_legal_moves(rollout_board)
+    random.shuffle(legal_moves)
+
+    for move in legal_moves:
+        # always pass the player who is about to move
+        apply_move_fast(rollout_board, move, player)
+
+        # alternate the player
+        player = Colour.RED if player == Colour.BLUE else Colour.BLUE
+
+        if is_terminal(rollout_board):
+            break
     
-    while not is_terminal((rollout_board)):
-        legal_moves = get_legal_moves(rollout_board)
+    return rollout_board.get_winner()
 
-        # give moves which are close to the center a better weight
-        scored = [(move_score(m), m) for m in legal_moves]
-        best_score = max(scored, key=lambda x: x[0])[0]
-        best_moves = [m for (s, m) in scored if s == best_score]
+def heuristic_rollout_policy(board: Board):
+    rollout_board = deepcopy(board)
+    player = current_player(rollout_board)
 
-        move = random.choice(best_moves)
-        apply_move(rollout_board, move)
+    for _ in range(board.size * board.size):
+        legal = get_legal_moves(rollout_board)
+        if not legal:
+            break
+
+        # score moves
+        scored = []
+        for m in legal:
+            # distance to opposite edge (encourage progress)
+            if player == Colour.RED:
+                score = board.size - m.x
+            else:
+                score = board.size - m.y
+
+            # tiny randomness to avoid determinism
+            score += random.random() * 0.1
+
+            scored.append((score, m))
+
+        # pick highest-scoring move
+        _, best = max(scored, key=lambda x: x[0])
+        apply_move_fast(rollout_board, best, player)
+
+        player = Colour.RED if player == Colour.BLUE else Colour.BLUE
+
+        if is_terminal(rollout_board):
+            break
 
     return rollout_board.get_winner()
+
 
 def neural_network_evaluate(board : Board):
     """
@@ -89,6 +139,7 @@ def neural_network_evaluate(board : Board):
     """
     # placeholder
     return 0.5
+
 class MCTSNode():
     """
         Monte Carlo Tree Search Node
@@ -103,7 +154,11 @@ class MCTSNode():
         self.board = board
         self.parent = parent
         self.move = move
+        
+        # 'player' is the player who MADE the move that produced this node
         self.player = player
+        # next_player is the player to move in this node
+        self.next_player = current_player(self.board)
 
         self.children = []
         self.untried_moves = get_legal_moves(self.board)
@@ -117,48 +172,51 @@ class MCTSNode():
     def best_child(self, c : float = 1.41):
         # c is a constant that balances exploration and exploitation
 
-        # first if there are any unvisited nodes choose them first
-        for child in self.children:
-            if child.visits == 0:
-                return child
-        
-        # if not then use the upper confidence applied to trees - UCB1 but applied to trees (UCT)
-        return max(
-            self.children,
-            key=lambda child: (
-                (child.wins / child.visits)
-                + c * math.sqrt((2 *math.log(self.visits)) / child.visits)
-            )
-        )
+        # first if there are any unvisited children choose randomly among them
+        unvisited = [child for child in self.children if child.visits == 0]
+        if unvisited:
+            return random.choice(unvisited)
+
+        # all children visited -> use UCT
+        def uct_score(child):
+            # exploitation
+            exploitation = child.wins / child.visits
+            # exploration
+            exploration = c * math.sqrt((2 * math.log(self.visits)) / child.visits)
+            return exploitation + exploration
+
+        return max(self.children, key=uct_score)
     
     def select_child(self):
-        # TODO: UCT-RAVE implementation
+        # TODO: UCT-RAVE implementation
         return self.best_child()
 
     def expand(self):
         move = self.untried_moves.pop()
 
         next_board = deepcopy(self.board)
-        next_player = current_player(next_board)
 
-        apply_move(next_board, move)
+        move_player = self.next_player
+
+        apply_move_fast(next_board, move, move_player)
         
         child = MCTSNode(
             board=next_board,
             parent=self,
             move=move,
-            player=next_player
+            player=move_player
         )
         self.children.append(child)
         return child
 
     def backpropogate(self, winner : Colour):
-        self.visits += 1
+        node = self
 
-        if winner is not None and self.player == winner:
-            self.wins += 1
-        if self.parent is not None:
-            self.parent.backpropogate(winner)
+        while node is not None:
+            node.visits += 1
+            if winner == node.player:
+                node.wins += 1
+            node = node.parent
 
 
 
@@ -187,64 +245,37 @@ class MyAgent(AgentBase):
         """
             Group 17 move making method.
         """
-
-        # MCTS
-        """
-        Jude - MCTS Psuedocode
-
-        get the root node
-
-        while the time elapsed < time limit:
-
-            Phase 1 - Selection:
-                while node isnt fully expanded and has children:
-                    select node with the best UCT child
-
-            Phase 2 - Expansion:
-                if node isnt terminal:
-                    pick a random untried move
-                    apply said move to board
-                    add child node of this new board state to the tree
-                    set node = child node
-
-            Phase 3 - Simultion / rollout:
-                select winner by running rollout on this nodes board
-            
-            Phase 4 - Backpropagation:
-                run backpropogate passing the winner and the node
-            
-            then return the move of the child with the most visits
-                OR use one of the four child selection methods - in lecture slides
-
-        """
         root = MCTSNode(deepcopy(board))
+        cp = current_player(board)
+        root.player = Colour.RED if cp == Colour.BLUE else Colour.BLUE
 
         TIME_LIMIT = 0.9
         end_time = time.time() + TIME_LIMIT
 
         while time.time() < end_time:
 
-            # selection
+            # selection
             node = root
             while node.is_fully_expanded() and not is_terminal(node.board):
-                # TODO: select child should be UCT-RAVE
+                # TODO: select child should be UCT-RAVE
                 node = node.select_child()
 
             # expansion
             if not is_terminal(node.board):
-                node = node.expand()
+                if not node.is_fully_expanded():
+                    node = node.expand()
             
             # simulation / rollout
-
-            # TODO (TEAM TASK - NN): Use neural_network_evaluate(node.board)
-            # to guide rollout or replace rollout_policy entirely.
-            nn_eval = neural_network_evaluate(node.board)
-
-            # TODO: placeholder - someone implement rollout policy
-            winner = rollout_policy(node.board)
+            winner = heuristic_rollout_policy(node.board)
 
             # backpropogation
             node.backpropogate(winner)
+
+        if not root.children:
+            legal = get_legal_moves(board)
+            if not legal:
+                return Move(0, 0)
+            return random.choice(legal)
         
         # select move with the most visits
         best_move = max(
@@ -253,12 +284,3 @@ class MyAgent(AgentBase):
         ).move
 
         return best_move
-
-        
-
-        
-
-        
-        
-
-    
