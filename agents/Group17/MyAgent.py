@@ -140,6 +140,13 @@ def neural_network_evaluate(board : Board):
     # placeholder
     return 0.5
 
+def key_board(board : Board):
+    """
+        Creates a hashable representation of a board state - for use in RAVE transposition table
+    """
+    return tuple(tuple(tile.colour for tile in row) for row in board.tiles)
+
+
 class MCTSNode():
     """
         Monte Carlo Tree Search Node
@@ -166,10 +173,16 @@ class MCTSNode():
         self.visits = 0
         self.wins = 0.0
 
+        # RAVE stats
+        self.rave_stats = {}
+
     def is_fully_expanded(self):
         return len(self.untried_moves) == 0
 
-    def best_child(self, c : float = 1.41):
+    def best_child(self, c : float = 1.41, b : float = 0.1):
+        """
+            UCT with RAVE best child selection
+        """
         # c is a constant that balances exploration and exploitation
 
         # first if there are any unvisited children choose randomly among them
@@ -178,20 +191,37 @@ class MCTSNode():
             return random.choice(unvisited)
 
         # all children visited -> use UCT
-        def uct_score(child):
+        def uct_rave_score(child):
+            """
+                Calculates the UCT-RAVE score for a child node. RAVE adds an additional est for good a move is based not only on the childs stats, but also:
+                    - results of all playouts playing said move - allows learning which moves are better, much earlier in the search -> Speed up
+
+            """
             # exploitation
             exploitation = child.wins / child.visits
             # exploration
             exploration = c * math.sqrt((2 * math.log(self.visits)) / child.visits)
-            return exploitation + exploration
 
-        return max(self.children, key=uct_score)
+            # rave value
+            if child.move in self.rave_stats:
+                rave_wins, rave_visits = self.rave_stats[child.move]
+                rave_value = rave_wins / rave_visits if rave_visits > 0 else 0 # accounting for divide by zero error
+            else:
+                rave_value = 0
+                rave_visits = 0
+            
+            # beta weighting
+            beta = rave_visits / (child.visits + rave_visits + 4 * child.visits * rave_visits * (b ** 2))
+            blended = (1 - beta) * exploitation + beta * rave_value
+            return blended + exploration
+
+        return max(self.children, key=uct_rave_score)
     
     def select_child(self):
         # TODO: UCT-RAVE implementation
         return self.best_child()
 
-    def expand(self):
+    def expand(self, transposition_table = None):
         move = self.untried_moves.pop()
 
         next_board = deepcopy(self.board)
@@ -199,23 +229,50 @@ class MCTSNode():
         move_player = self.next_player
 
         apply_move_fast(next_board, move, move_player)
-        
-        child = MCTSNode(
-            board=next_board,
-            parent=self,
-            move=move,
-            player=move_player
-        )
+
+        key = key_board(next_board)
+
+        # if the boards in the transp table can reuse the node
+        if transposition_table is not None and key in transposition_table:
+            child = transposition_table[key]
+            child.parent = self
+        else:
+            child = MCTSNode(
+                board=next_board,
+                parent=self,
+                move=move,
+                player=move_player
+            )
+            if transposition_table is not None: # add node to tt table 
+                transposition_table[key] = child
         self.children.append(child)
         return child
 
     def backpropogate(self, winner : Colour):
+        """
+            Backprop, with AMAF/RAVE updates also
+        """
         node = self
+
+        played_moves = []
+        cur = self
+        while cur is not None:
+            played_moves.append(cur.move)
+            cur = cur.parent
 
         while node is not None:
             node.visits += 1
             if winner == node.player:
                 node.wins += 1
+            
+            # rave updating
+            for mov in played_moves:
+                if mov not in node.rave_stats:
+                    node.rave_stats[mov] = [0, 0] # (0 wins 0 visits)
+                if winner == node.player:
+                    node.rave_stats[mov][0] += 1
+                node.rave_stats[mov][1] += 1
+
             node = node.parent
 
 
@@ -245,6 +302,9 @@ class MyAgent(AgentBase):
         """
             Group 17 move making method.
         """
+
+        transposition_table = {}
+
         root = MCTSNode(deepcopy(board))
         cp = current_player(board)
         root.player = Colour.RED if cp == Colour.BLUE else Colour.BLUE
@@ -263,7 +323,7 @@ class MyAgent(AgentBase):
             # expansion
             if not is_terminal(node.board):
                 if not node.is_fully_expanded():
-                    node = node.expand()
+                    node = node.expand(transposition_table)
             
             # simulation / rollout
             winner = heuristic_rollout_policy(node.board)

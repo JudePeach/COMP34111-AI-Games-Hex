@@ -1,75 +1,76 @@
+# nn_model.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-import sys, os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-
-from src.Board import Board
-from src.Colour import Colour
-from src.Move import Move
 
 def board_to_tensor(board):
-    """ 
-        Converts the current board state to a tensor rep
     """
-
+    convert board to (2, H, W) float tensor as before.
+    """
     size = board.size
-    tensor = torch.zeros((2, size, size))
-
+    t = torch.zeros((2, size, size), dtype=torch.float32)
     for i in range(size):
         for j in range(size):
-            tile = board.tiles[i][j].colour 
-            if tile == Colour.RED:
-                tensor[0][i][j] = 1
-            elif tile == Colour.BLUE:
-                tensor[1][i][j] = 1
-    
-    return tensor
+            c = board.tiles[i][j].colour
+            if c == Colour.RED:
+                t[0, i, j] = 1.0
+            elif c == Colour.BLUE:
+                t[1, i, j] = 1.0
+    return t
 
-class HexNet(nn.Module):
-    def __init__(self, board_size=11):
+class ConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
         super().__init__()
-        
-        self.conv1 = nn.Conv2d(2, 32, 3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
-        self.conv3 = nn.Conv2d(64, 64, 3, padding=1)
-        
-        self.fc1 = nn.Linear(64 * board_size * board_size, 256)
-        self.fc2 = nn.Linear(256, 1)   # output probability
-        
+        self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
+        self.bn = nn.BatchNorm2d(out_ch)
     def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        
-        x = torch.flatten(x, 1)
-        x = F.relu(self.fc1(x))
-        x = torch.sigmoid(self.fc2(x))  # probability in [0,1]
-        return x
+        return F.relu(self.bn(self.conv(x)))
 
-def train_dummy_model():
-    model = HexNet(board_size=11)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    loss_fn = nn.BCELoss()
+class ResidualBlock(nn.Module):
+    def __init__(self, ch):
+        super().__init__()
+        self.conv1 = nn.Conv2d(ch, ch, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(ch)
+        self.conv2 = nn.Conv2d(ch, ch, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(ch)
+    def forward(self, x):
+        residual = x
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        return F.relu(out)
 
-    # Dummy data: 1000 random boards with random win prob targets
-    for epoch in range(5):
-        for _ in range(100):
-            # random board tensor
-            board_tensor = torch.randn((1, 2, 11, 11))
-            
-            # random probability label
-            target = torch.rand((1, 1))
+class HexNetPV(nn.Module):
+    def __init__(self, board_size=11, n_blocks=3, channels=64):
+        super().__init__()
+        self.conv_in = ConvBlock(2, channels)
+        self.res_blocks = nn.Sequential(*[ResidualBlock(channels) for _ in range(n_blocks)])
 
-            # forward
-            pred = model(board_tensor)
-            loss = loss_fn(pred, target)
+        # policy head
+        self.policy_conv = nn.Conv2d(channels, 2, kernel_size=1)
+        self.policy_bn = nn.BatchNorm2d(2)
+        self.policy_fc = nn.Linear(2 * board_size * board_size, board_size * board_size)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        # value head
+        self.value_conv = nn.Conv2d(channels, 1, kernel_size=1)
+        self.value_bn = nn.BatchNorm2d(1)
+        self.value_fc1 = nn.Linear(1 * board_size * board_size, 256)
+        self.value_fc2 = nn.Linear(256, 1)
 
-        print("Epoch", epoch, "Loss:", loss.item())
+    def forward(self, x):
+        # x: (B, 2, H, W)
+        x = self.conv_in(x)
+        x = self.res_blocks(x)
 
-    return model
+        # policy
+        p = F.relu(self.policy_bn(self.policy_conv(x)))
+        p = p.view(p.size(0), -1)
+        p = self.policy_fc(p)   # logits shape (B, H*W)
+
+        # value
+        v = F.relu(self.value_bn(self.value_conv(x)))
+        v = v.view(v.size(0), -1)
+        v = F.relu(self.value_fc1(v))
+        v = torch.tanh(self.value_fc2(v)).squeeze(-1)   # in [-1,1]
+
+        return p, v
