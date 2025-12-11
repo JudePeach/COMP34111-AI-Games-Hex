@@ -3,6 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from src.Colour import Colour
+
 def board_to_tensor(board):
     """
     convert board to (2, H, W) float tensor as before.

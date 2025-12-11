@@ -12,7 +12,39 @@ import math
 import random
 import time
 
+import torch
+import torch.nn as nn
+
+from agents.Group17.nn import HexNetPV
+
 # util funcs
+
+def load_hex_model(path = "/home/hex/agents/Group17/hex_model_final.pt"):
+    """
+        Loads our trained neural network model from file.
+    """
+    state_dict = torch.load(path, map_location=torch.device("cpu"))
+
+    model = HexNetPV()   # ← You must define this EXACTLY like in training
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
+
+hex_model = load_hex_model()
+
+def board_to_tensor(board : Board):
+    size = board.size
+    tensor = torch.zeros((2, size, size), dtype=torch.float32)
+
+    for i in range(size):
+        for j in range(size):
+            tile = board.tiles[i][j].colour
+            if tile == Colour.RED:
+                tensor[0, i, j] = 1   # channel 0 = RED
+            elif tile == Colour.BLUE:
+                tensor[1, i, j] = 1   # channel 1 = BLUE
+    return tensor.unsqueeze(0)  # shape: (1, 2, size, size)
+
 def current_player(board : Board):
 
     """
@@ -134,11 +166,15 @@ def heuristic_rollout_policy(board: Board):
 
 def neural_network_evaluate(board : Board):
     """
-        TODO: Neural Network evaluation function to be implemented - think should return the probability of winning for the current player
+        Neural Network evaluation function to be implemented - returns the probability of winning for the current player
 
     """
-    # placeholder
-    return 0.5
+
+    tensor = board_to_tensor(board)
+    with torch.no_grad():
+        policy_logits, value = hex_model(tensor)  # depends on your model output
+        value = value.item()
+    return value  # probability that current player wins
 
 def key_board(board : Board):
     """
@@ -218,7 +254,7 @@ class MCTSNode():
         return max(self.children, key=uct_rave_score)
     
     def select_child(self):
-        # TODO: UCT-RAVE implementation
+        # UCT-RAVE implementation in best child function
         return self.best_child()
 
     def expand(self, transposition_table = None):
@@ -248,7 +284,7 @@ class MCTSNode():
         self.children.append(child)
         return child
 
-    def backpropogate(self, winner : Colour):
+    def backpropogate(self, winner : Colour, value : float):
         """
             Backprop, with AMAF/RAVE updates also
         """
@@ -263,7 +299,9 @@ class MCTSNode():
         while node is not None:
             node.visits += 1
             if winner == node.player:
-                node.wins += 1
+                #node.wins += 1
+                node.wins += value if node.player == Colour.RED else (1 - value)
+
             
             # rave updating
             for mov in played_moves:
@@ -317,7 +355,6 @@ class MyAgent(AgentBase):
             # selection
             node = root
             while node.is_fully_expanded() and not is_terminal(node.board):
-                # TODO: select child should be UCT-RAVE
                 node = node.select_child()
 
             # expansion
@@ -326,10 +363,12 @@ class MyAgent(AgentBase):
                     node = node.expand(transposition_table)
             
             # simulation / rollout
-            winner = heuristic_rollout_policy(node.board)
+            #winner = heuristic_rollout_policy(node.board)
+            value = neural_network_evaluate(node.board)
+            winner = Colour.RED if value > 0.5 else Colour.BLUE
 
             # backpropogation
-            node.backpropogate(winner)
+            node.backpropogate(winner, value)
 
         if not root.children:
             legal = get_legal_moves(board)
