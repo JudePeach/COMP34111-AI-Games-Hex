@@ -15,11 +15,22 @@ import time
 import torch
 import torch.nn as nn
 
-from agents.Group17.nn import HexNetPV
+from agents.Group17.training import HexNetPV
 
 # util funcs
 
-def load_hex_model(path = "/home/hex/agents/Group17/hex_model_final.pt"):
+def evaluate_node(node):
+    # value returned is probability RED wins
+    red_win_prob = neural_network_evaluate(node.board)
+    
+    # convert to probability that *node.next_player* wins
+    if node.next_player == Colour.RED:
+        return red_win_prob
+    else:
+        return 1 - red_win_prob
+
+
+def load_hex_model(path = "/home/hex/agents/Group17/checkpoints/hex_model_final_new.pt"):
     """
         Loads our trained neural network model from file.
     """
@@ -364,8 +375,11 @@ class MyAgent(AgentBase):
             
             # simulation / rollout
             #winner = heuristic_rollout_policy(node.board)
-            value = neural_network_evaluate(node.board)
-            winner = Colour.RED if value > 0.5 else Colour.BLUE
+            value = evaluate_node(node)
+            winner = node.next_player if value > 0.5 else (
+                Colour.RED if node.next_player == Colour.BLUE else Colour.BLUE
+            )
+
 
             # backpropogation
             node.backpropogate(winner, value)
