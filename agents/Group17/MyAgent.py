@@ -17,6 +17,9 @@ import torch.nn as nn
 
 from agents.Group17.training import HexNetPV
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 # util funcs
 
 def evaluate_node(node):
@@ -34,9 +37,9 @@ def load_hex_model(path = "/home/hex/agents/Group17/checkpoints/hex_model_final_
     """
         Loads our trained neural network model from file.
     """
-    state_dict = torch.load(path, map_location=torch.device("cpu"))
+    state_dict = torch.load(path, map_location=DEVICE)
 
-    model = HexNetPV()   # ← You must define this EXACTLY like in training
+    model = HexNetPV()  
     model.load_state_dict(state_dict)
     model.eval()
     return model
@@ -181,7 +184,7 @@ def neural_network_evaluate(board : Board):
 
     """
 
-    tensor = board_to_tensor(board)
+    tensor = board_to_tensor(board).to(DEVICE)
     with torch.no_grad():
         policy_logits, value = hex_model(tensor)  # depends on your model output
         value = value.item()

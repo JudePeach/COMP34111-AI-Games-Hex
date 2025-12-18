@@ -16,10 +16,6 @@ from src.Colour import Colour
 from src.Move import Move
 
 
-# ============================================================
-# REPLAY BUFFER
-# ============================================================
-
 class ReplayBuffer:
     def __init__(self, capacity=50000):
         self.capacity = capacity
@@ -36,11 +32,6 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-
-# ============================================================
-# SUPPORT FUNCTIONS
-# ============================================================
-
 def get_legal_moves(board):
     legal = []
     for i in range(board.size):
@@ -48,7 +39,6 @@ def get_legal_moves(board):
             if board.tiles[i][j].colour is None:
                 legal.append((i, j))
     return legal
-
 
 def make_move(board, move, player):
     new_board = deepcopy(board)
@@ -60,11 +50,6 @@ def make_move(board, move, player):
 def current_player(board, turn):
     # turn flips after each move
     return Colour.RED if turn % 2 == 0 else Colour.BLUE
-
-
-# ============================================================
-# MCTS NODE
-# ============================================================
 
 class MCTSNode:
     def __init__(self, board, player):
@@ -81,11 +66,6 @@ class MCTSNode:
 
     def is_leaf(self):
         return len(self.P) == 0  # not expanded yet
-
-
-# ============================================================
-# MCTS
-# ============================================================
 
 class MCTS:
     def __init__(self, model, board_size, sims=200, cpuct=1.4):
@@ -185,11 +165,6 @@ class MCTS:
         u = c * p * math.sqrt(N_sum + 1) / (1 + node.N[move])
         return q + u
 
-
-# ============================================================
-# SELF-PLAY GAME GENERATOR
-# ============================================================
-
 def self_play_game(model, board_size, mcts_sims=200):
     model.eval()
     buffer_entries = []
@@ -248,18 +223,14 @@ def train_hex_network(
     for it in range(iterations):
         print(f"\n=== Iteration {it+1}/{iterations} ===")
 
-        # -----------------------
         # 1. Self-play
-        # -----------------------
         for g in range(games_per_iter):
             game_data = self_play_game(model, board_size, mcts_sims)
             for entry in game_data:
                 replay.add(*entry)
             print(f"  Game {g+1}/{games_per_iter} generated {len(game_data)} samples.")
 
-        # -----------------------
-        # 2. Training
-        # -----------------------
+       # 2. Training
         model.train()
         if len(replay) < batch_size:
             continue
